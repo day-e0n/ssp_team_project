@@ -49,8 +49,8 @@
 
 #include "ftl_config.h"
 
-#define ORIGINAL_GC // wdy: original GC 활성화
-// #define GAME_GC // wdy: GAME GC 활성화
+// #define ORIGINAL_GC // wdy: original GC 활성화
+#define GAME_GC // wdy: GAME GC 활성화
 // #define CB_GC // wdy: Cost_Benefit GC 활성화
 
 #if defined(ORIGINAL_GC)
@@ -75,11 +75,6 @@
 	extern unsigned int copyCnt;
 
 #elif defined(GAME_GC) // Greedy And Multi-Generational GC
-	#ifndef GARBAGE_COLLECTION_H_
-	#define GARBAGE_COLLECTION_H_
-
-	#include "ftl_config.h"
-
 	typedef struct _GC_VICTIM_LIST_ENTRY {
 		unsigned int headBlock : 16;
 		unsigned int tailBlock : 16;
@@ -136,5 +131,8 @@
 	// GcScheduler() tick toggle
 	void FlipGeneration(void);
 
+	#endif /* GENERATIONAL_GC_H_ */
+
+#endif /* GAME_GC */
 
 #endif /* GARBAGE_COLLECTION_H_ */

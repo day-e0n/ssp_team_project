@@ -45,6 +45,12 @@
 //   - First draft
 //////////////////////////////////////////////////////////////////////////////////
 
+// #define ORIGINAL_GC // wdy: original GC 활성화
+#define GAME_GC // wdy: GAME GC 활성화
+// #define CB_GC // wdy: Cost_Benefit GC 활성화
+
+#include "garbage_collection.h"
+
 #if defined(ORIGINAL_GC)
 
 	#include "xil_printf.h"
@@ -227,7 +233,6 @@
 	#include "xil_printf.h"
 	#include <assert.h>
 	#include "memory_map.h"
-	#include "garbage_collection.h"
 
 	#define GC_SCHED_INTERVAL_TICK 10        // GC scheduling frequency
 	#define GC_PAGE_LIMIT 8                  // Copy only limited pages per step

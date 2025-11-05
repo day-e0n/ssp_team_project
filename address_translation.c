@@ -88,7 +88,7 @@ void InitAddressMap()
 }
 
 void InitSliceMap()
-{
+{	
 	int sliceAddr;
 	for(sliceAddr=0; sliceAddr<SLICES_PER_SSD ; sliceAddr++)
 	{

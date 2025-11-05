@@ -52,6 +52,7 @@
 #include "memory_map.h"
 #include "t4nsc_ucode.h"
 #include "nsc_driver.h"
+#include "garbage_collection.h"
 
 unsigned int storageCapacity_L;
 T4REGS chCtlReg[USER_CHANNELS];
