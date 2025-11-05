@@ -49,6 +49,9 @@
 
 #include "ftl_config.h"
 
+#define ORIGINAL_GC // wdy: original GC 활성화
+#define GAME_GC // wdy: GAME GC 활성화
+
 typedef struct _GC_VICTIM_LIST_ENTRY {
 	unsigned int headBlock : 16;
 	unsigned int tailBlock : 16;
