@@ -71,6 +71,7 @@ static inline uint32_t CalculateCostBenefitScore(unsigned int dieNo, unsigned in
 static inline void DetachBlockFromGcList(unsigned int dieNo, unsigned int blockNo);
 
 // Existing external helpers from other modules (not modified)
+// Vorg2VsaTranslation은 다른 모듈/헤더에서 선언되어 있다고 가정
 // extern unsigned int Vorg2VsaTranslation(unsigned int dieNo, unsigned int blockNo, unsigned int pageNo);
 extern void EraseBlock(unsigned int dieNo, unsigned int blockNo);
 extern unsigned int GetFromFreeReqQ(void);
@@ -99,7 +100,7 @@ void InitGcVictimMap()
         }
 
         // [CB] Initialize last-erase tick of all blocks
-        //각 die 내의 모든 블록에 대해 "마지막으로 블록을 삭제(erase)한 시점"의 논리적 타임스탬프를 0으로 초기화
+        // 각 die 내의 모든 블록에 대해 "마지막으로 블록을 삭제(erase)한 시점"의 논리적 타임스탬프를 0으로 초기화
         for (blockNo = 0; blockNo < USER_BLOCKS_PER_DIE; blockNo++)
             gcLastEraseTick[dieNo][blockNo] = 0;
     }
@@ -112,6 +113,14 @@ void GarbageCollection(unsigned int dieNo)
 
     // [Policy] Victim selection is inside GetFromGcVictimList (name preserved)
     victimBlockNo = GetFromGcVictimList(dieNo);
+
+    // [SAFETY] 실패 시에는 바로 리턴해서 배열 인덱스 OOB를 방지
+    if (victimBlockNo == BLOCK_FAIL || victimBlockNo == BLOCK_NONE)
+    {
+        xil_printf("[CB-GC] No victim block on die %u, skip GC\r\n", dieNo);
+        return;
+    }
+
     dieNoForGcCopy = dieNo;
 
     if (virtualBlockMapPtr->block[dieNo][victimBlockNo].invalidSliceCnt != SLICES_PER_BLOCK)
@@ -156,9 +165,11 @@ void GarbageCollection(unsigned int dieNo)
                     UpdateTempDataBufEntryInfoBlockingReq(reqPoolPtr->reqPool[reqSlotTag].dataBufInfo.entry, reqSlotTag);
                     reqPoolPtr->reqPool[reqSlotTag].nandInfo.virtualSliceAddr = FindFreeVirtualSliceForGc(dieNoForGcCopy, victimBlockNo);
 
-                    logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr = reqPoolPtr->reqPool[reqSlotTag].nandInfo.virtualSliceAddr;
-                    virtualSliceMapPtr->virtualSlice[reqPoolPtr->reqPool[reqSlotTag].nandInfo.virtualSliceAddr].logicalSliceAddr = logicalSliceAddr;
-                    
+                    logicalSliceMapPtr->logicalSlice[logicalSliceAddr].virtualSliceAddr =
+                        reqPoolPtr->reqPool[reqSlotTag].nandInfo.virtualSliceAddr;
+                    virtualSliceMapPtr->virtualSlice[reqPoolPtr->reqPool[reqSlotTag].nandInfo.virtualSliceAddr].logicalSliceAddr =
+                        logicalSliceAddr;
+
                     SelectLowLevelReqQ(reqSlotTag);
                 }
         }
@@ -167,16 +178,16 @@ void GarbageCollection(unsigned int dieNo)
     EraseBlock(dieNo, victimBlockNo);
 
     // [CB에서 추가한 라인] Victim block was reset by erase; record current tick as its new birth time.
-    // erase 직후에 gcLastEraseTick을 현재 tick으로 설정하면 그 블록의 age가 0이 되어 점수가 낮아지고, 
+    // erase 직후에 gcLastEraseTick을 현재 tick으로 설정하면 그 블록의 age가 0이 되어 점수가 낮아지고,
     // 이 뒤에 즉시 다시 GC 대상으로 선택되는 것을 막음
     gcLastEraseTick[dieNo][victimBlockNo] = gcActivityTick;
 }
 
 
-// Greedy 구현은 보통 "리스트의 head 또는 tail을 바로 꺼내는 방식"으로 victim을 선택하기 때문에 
+// Greedy 구현은 보통 "리스트의 head 또는 tail을 바로 꺼내는 방식"으로 victim을 선택하기 때문에
 // 제거 후 블록의 next/prev를 별도로 지워야 할 필요가 적습니다.
-// Cost-Benefit 구현은 모든 후보(리스트의 임의 요소)를 스캔해서 최적 블록(bestBlock)을 고른다. 
-// 이 경우 임의 위치에서 블록을 안전하게 분리(detach)해야 하므로, 
+// Cost-Benefit 구현은 모든 후보(리스트의 임의 요소)를 스캔해서 최적 블록(bestBlock)을 고른다.
+// 이 경우 임의 위치에서 블록을 안전하게 분리(detach)해야 하므로,
 // 분리 후 블록의 next/prev 포인터를 명확히 지우는 안전한 래퍼(DetachBlockFromGcList)가 추가된 것.
 // --------------------------- GC list manipulation ----------------------------
 // [CB에서 추가한 함수] Detach helper keeps the public API (SelectiveGetFromGcVictimList) but
@@ -215,13 +226,15 @@ static inline uint32_t CalculateCostBenefitScore(unsigned int dieNo, unsigned in
 void PutToGcVictimList(unsigned int dieNo, unsigned int blockNo, unsigned int invalidSliceCnt)
 {
     if (invalidSliceCnt)    // 'age' 개념을 논리적 이벤트 카운터로 구현한 것
-        gcActivityTick++; // [CB에서 추가한 라인들] advance logical time when any block accumulates invalid data
+        gcActivityTick++;   // [CB에서 추가한 라인들] advance logical time when any block accumulates invalid data
 
     if (gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock != BLOCK_NONE)
     {
-        virtualBlockMapPtr->block[dieNo][blockNo].prevBlock = gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock;
+        virtualBlockMapPtr->block[dieNo][blockNo].prevBlock =
+            gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock;
         virtualBlockMapPtr->block[dieNo][blockNo].nextBlock = BLOCK_NONE;
-        virtualBlockMapPtr->block[dieNo][gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock].nextBlock = blockNo;
+        virtualBlockMapPtr->block[dieNo]
+            [gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock].nextBlock = blockNo;
         gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = blockNo;
     }
     else
@@ -233,7 +246,7 @@ void PutToGcVictimList(unsigned int dieNo, unsigned int blockNo, unsigned int in
     }
 }
 
-//모든 후보를 전수 스캔해 (invalid×age)/(valid+1) 최댓값 선택 + 임의 위치 제거” 
+// 모든 후보를 전수 스캔해 (invalid×age)/(valid+1) 최댓값 선택 + 임의 위치 제거.
 // 비교적 정확·공정, 성능은 후보 수에 비례.
 // ----------------------- Cost-Benefit Victim Selection -----------------------
 unsigned int GetFromGcVictimList(unsigned int dieNo)
@@ -265,13 +278,13 @@ unsigned int GetFromGcVictimList(unsigned int dieNo)
     if (bestBlock != BLOCK_FAIL)
     {
         DetachBlockFromGcList(dieNo, bestBlock);
-    }
-    else
-    {
-        assert(!"[WARNING] There are no free blocks. Abort terminate this ssd. [WARNING]");
+        return bestBlock;
     }
 
-    return bestBlock;
+    // [SAFETY] victim이 하나도 없을 때는 assert + sentinel 반환
+    xil_printf("[CB-GC] GetFromGcVictimList: no victim found on die %u\r\n", dieNo);
+    assert(!"[WARNING] There are no free blocks. Abort terminate this ssd. [WARNING]");
+    return BLOCK_FAIL;
 }
 
 
