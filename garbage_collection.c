@@ -33,6 +33,7 @@
 // Version: v1.0.0
 //
 // Description:
+//   - GameGC & Cost-Benefit GC integrated version
 //   - select a victim block
 //   - collect valid pages to a free block
 //   - erase a victim block to make a free block
