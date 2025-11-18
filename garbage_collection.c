@@ -59,6 +59,8 @@
 	#include "memory_map.h"
 
 	P_GC_VICTIM_MAP gcVictimMapPtr;
+	unsigned int gcTriggered;
+	unsigned int copyCnt;
 
 	void InitGcVictimMap()
 	{
