@@ -258,6 +258,8 @@
 	static unsigned char s_gcGenBit[(SLICES_PER_SSD + 7) / 8];
 
 	P_GC_VICTIM_MAP gcVictimMapPtr;
+	unsigned int gcTriggered;
+	unsigned int copyCnt;
 	INCREMENTAL_GC_CONTEXT gcCtx[USER_DIES]; // per-die incremental GC context
 
 	//-------------------------------------------------------------------------------
@@ -616,6 +618,10 @@
 	#endif
 
 	P_GC_VICTIM_MAP gcVictimMapPtr;
+
+	// 외부 인터페이스와의 호환성을 위한 변수들
+	unsigned int gcTriggered;
+	unsigned int copyCnt;
 
 	// -------------------------- GC 정책 선택 ------------------------------
 	// Cost-Benefit 정책만 지원합니다. 레거시 GREEDY 모드는 제거되었습니다.
