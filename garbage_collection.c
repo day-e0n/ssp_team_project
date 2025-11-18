@@ -50,10 +50,9 @@
 #define GAME_GC // wdy: GAME GC 활성화
 // #define CB_GC // wdy: Cost_Benefit GC 활성화
 
-#include "garbage_collection.h"
-
 #if defined(ORIGINAL_GC)
 
+	#include "garbage_collection.h"
 	#include "xil_printf.h"
 	#include <assert.h>
 	#include "memory_map.h"

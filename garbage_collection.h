@@ -49,9 +49,7 @@
 
 #include "ftl_config.h"
 
-// #define ORIGINAL_GC // wdy: original GC 활성화
-#define GAME_GC // wdy: GAME GC 활성화
-// #define CB_GC // wdy: Cost_Benefit GC 활성화
+// GC 모드는 garbage_collection.c에서 정의됩니다
 
 #if defined(ORIGINAL_GC)
 	typedef struct _GC_VICTIM_LIST_ENTRY {
