@@ -73,6 +73,12 @@
 	extern unsigned int copyCnt;
 
 #elif defined(GAME_GC) // Greedy And Multi-Generational GC
+
+#ifndef GARBAGE_COLLECTION_H_
+#define GARBAGE_COLLECTION_H_
+
+#include "ftl_config.h"
+
 	typedef struct _GC_VICTIM_LIST_ENTRY {
 		unsigned int headBlock : 16;
 		unsigned int tailBlock : 16;
@@ -94,7 +100,7 @@
 	extern unsigned int copyCnt;
 
 	typedef enum {
-		GC_STATE_IDLE,
+		GC_STATE_IDLE = 0,
 		GC_STATE_SELECT_VICTIM,
 		GC_STATE_COPY_VALID_PAGES,
 		GC_STATE_ERASE_BLOCK
@@ -107,29 +113,12 @@
 		unsigned char active;
 	} INCREMENTAL_GC_CONTEXT;
 
-	extern INCREMENTAL_GC_CONTEXT gcCtx[USER_DIES];
-
-	void InitIncrementalGc(void);
 
 	void GcScheduler(void);
-
 	void TriggerGc(unsigned int dieNo);
+	void RevalidateBlock(unsigned int dieNo, unsigned int blockNo);
 
-	void BuildGcLiveMark(void);
-
-	#ifndef GENERATIONAL_GC_H_
-	#define GENERATIONAL_GC_H_
-
-	// (0/1), current Generation
-	extern unsigned int gcGenerationalParity;
-
-	// called when LSA rewrite
-	void LsaWriteNote(unsigned int logicalSliceAddr);
-
-	// GcScheduler() tick toggle
-	void FlipGeneration(void);
-
-	#endif /* GENERATIONAL_GC_H_ */
+	extern P_GC_VICTIM_MAP gcVictimMapPtr;
 
 #endif /* GAME_GC */
 
