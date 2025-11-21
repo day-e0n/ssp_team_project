@@ -238,22 +238,53 @@
 
 	int NeedGc(unsigned int dieNo)
 	{
-		return (virtualDieMapPtr->die[dieNo].freeBlockCnt <= GC_TRIGGER_FREE_BLOCK_THRESHOLD);
+		unsigned int freeBlocks = virtualDieMapPtr->die[dieNo].freeBlockCnt;
+		int needGc = (freeBlocks <= GC_TRIGGER_FREE_BLOCK_THRESHOLD);
+		
+		if (needGc)
+		{
+			xil_printf("[GC-Check] Die %d needs GC: FreeBlocks=%d <= Threshold=%d\r\n", 
+					   dieNo, freeBlocks, GC_TRIGGER_FREE_BLOCK_THRESHOLD);
+		}
+		
+		return needGc;
 	}
 
 	void GcScheduler()
 	{
 		static unsigned int tick = 0;
+		static unsigned int lastPrintTick = 0;
 		tick++;
+
+		// 주기적으로 모든 die의 free block 개수 출력 (1000 tick마다)
+		if (tick - lastPrintTick >= 1000)
+		{
+			xil_printf("[GC-Monitor] Tick=%u FreeBlocks: ", tick);
+			for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+			{
+				xil_printf("D%d:%d ", dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
+			}
+			xil_printf("\r\n");
+			lastPrintTick = tick;
+		}
 
 		if (tick % GC_SCHED_INTERVAL_TICK == 0)
 		{
 			for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
 			{
+				unsigned int freeBlocks = virtualDieMapPtr->die[dieNo].freeBlockCnt;
+				
 				if (gcCtx[dieNo].active)
+				{
+					xil_printf("[GC-Sched] Die %d: Active GC continues (FreeBlocks=%d)\r\n", dieNo, freeBlocks);
 					GarbageCollection(dieNo);
+				}
 				else if (NeedGc(dieNo))
+				{
+					xil_printf("[GC-Trigger] Die %d: GC TRIGGERED! FreeBlocks=%d (Threshold=%d)\r\n", 
+							   dieNo, freeBlocks, GC_TRIGGER_FREE_BLOCK_THRESHOLD);
 					GarbageCollection(dieNo);
+				}
 			}
 		}
 	}
@@ -302,20 +333,25 @@
 		case GC_STATE_IDLE:
 			ctx->state = GC_STATE_SELECT_VICTIM;
 			ctx->active = 1;
-			xil_printf("[IGC] -> SELECT_VICTIM (Die %d)\r\n", dieNo);
+			xil_printf("[IGC] Die %d: IDLE -> SELECT_VICTIM (FreeBlocks=%d)\r\n", 
+					   dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
 			break;
 
 		case GC_STATE_SELECT_VICTIM:
 			ctx->victimBlock = GetFromGcVictimList(dieNo);
 			if (ctx->victimBlock == BLOCK_NONE)
 			{
+				xil_printf("[IGC] Die %d: No victim block found, GC ends (FreeBlocks=%d)\r\n", 
+						   dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
 				ctx->state = GC_STATE_IDLE;
 				ctx->active = 0;
 				return;
 			}
 			ctx->curPage = 0;
 			ctx->state = GC_STATE_COPY_VALID_PAGES;
-			xil_printf("[IGC] Victim selected (Die %d, Block %d)\r\n", dieNo, ctx->victimBlock);
+			unsigned int invalidPages = virtualBlockMapPtr->block[dieNo][ctx->victimBlock].invalidSliceCnt;
+			xil_printf("[IGC] Die %d: Victim selected Block=%d InvalidPages=%d (FreeBlocks=%d)\r\n", 
+					   dieNo, ctx->victimBlock, invalidPages, virtualDieMapPtr->die[dieNo].freeBlockCnt);
 			break;
 
 		case GC_STATE_COPY_VALID_PAGES:
@@ -362,8 +398,12 @@
 		}
 
 		case GC_STATE_ERASE_BLOCK:
+			unsigned int freeBlocksBefore = virtualDieMapPtr->die[dieNo].freeBlockCnt;
 			EraseBlock(dieNo, ctx->victimBlock);
-			xil_printf("[IGC] Erased block (Die %d, Block %d)\r\n", dieNo, ctx->victimBlock);
+			unsigned int freeBlocksAfter = virtualDieMapPtr->die[dieNo].freeBlockCnt;
+			xil_printf("[IGC] Die %d: Block %d ERASED! FreeBlocks: %d -> %d (+%d)\r\n", 
+					   dieNo, ctx->victimBlock, freeBlocksBefore, freeBlocksAfter, 
+					   freeBlocksAfter - freeBlocksBefore);
 			ctx->state = GC_STATE_IDLE;
 			ctx->victimBlock = BLOCK_NONE;
 			ctx->curPage = 0;
