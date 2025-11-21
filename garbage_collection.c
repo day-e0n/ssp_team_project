@@ -398,6 +398,7 @@
 		}
 
 		case GC_STATE_ERASE_BLOCK:
+		{
 			unsigned int freeBlocksBefore = virtualDieMapPtr->die[dieNo].freeBlockCnt;
 			EraseBlock(dieNo, ctx->victimBlock);
 			unsigned int freeBlocksAfter = virtualDieMapPtr->die[dieNo].freeBlockCnt;
@@ -409,6 +410,7 @@
 			ctx->curPage = 0;
 			ctx->active = 0;
 			break;
+		}
 		}
 	}
 
