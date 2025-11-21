@@ -231,13 +231,14 @@
 
 	#define GC_SCHED_INTERVAL_TICK 100000
 	#define GC_PAGE_LIMIT 8
-	#define GC_TRIGGER_FREE_BLOCK_THRESHOLD 2015
+	#define GC_TRIGGER_FREE_BLOCK_THRESHOLD 128
 
 	P_GC_VICTIM_MAP gcVictimMapPtr;
 	INCREMENTAL_GC_CONTEXT gcCtx[USER_DIES];
 
 	int NeedGc(unsigned int dieNo)
 	{
+		xil_printf("[DBG] Die %d freeBlockCnt=%d\n", dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
 		return (virtualDieMapPtr->die[dieNo].freeBlockCnt <= GC_TRIGGER_FREE_BLOCK_THRESHOLD);
 	}
 
@@ -418,11 +419,8 @@
 			}
 		}
 
-		if (bestBlock == BLOCK_FAIL)
-		{
-    		xil_printf("[IGC][WARN] No victim block found (Die %d). Skip GC this cycle.\r\n", dieNo);
-    		return BLOCK_NONE;  // 그냥 빠져나오게
-		}
+		assert(!"[WARNING] There are no free blocks. Abort terminate this ssd. [WARNING]");
+		return BLOCK_FAIL;
 	}
 
 	void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
