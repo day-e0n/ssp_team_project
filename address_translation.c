@@ -676,11 +676,11 @@ unsigned int FindFreeVirtualSlice()
 			virtualDieMapPtr->die[dieNo].currentBlock = currentBlock;
 		else
 		{
-			GarbageCollection(dieNo); // Original_GC 사용 시 주석 해제
+			//GarbageCollection(dieNo); // Original_GC 사용 시 주석 해제
 			
 			/* Game GC 사용 시 주석 해제 (2줄만) */
-			// TriggerGc(dieNo);
-			// xil_printf("[IGC] Triggered GC for Die %d\r\n", dieNo);
+			TriggerGc(dieNo);
+			xil_printf("[IGC] Triggered GC for Die %d\r\n", dieNo);
 
 			currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
 

@@ -229,9 +229,9 @@
 	#include "garbage_collection.h"
 	#include "address_translation.h"
 
-	#define GC_SCHED_INTERVAL_TICK 10
+	#define GC_SCHED_INTERVAL_TICK 100
 	#define GC_PAGE_LIMIT 8
-	#define GC_TRIGGER_FREE_BLOCK_THRESHOLD 4
+	#define GC_TRIGGER_FREE_BLOCK_THRESHOLD 128
 
 	P_GC_VICTIM_MAP gcVictimMapPtr;
 	INCREMENTAL_GC_CONTEXT gcCtx[USER_DIES];

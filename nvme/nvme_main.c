@@ -188,8 +188,10 @@ void nvme_main()
 		{
 			CheckDoneNvmeDmaReq();
 			SchedulingNandReq();
-			// GcScheduler(); // GameGC 사용 시 주석 해제
+			
 		}
+
+		GcScheduler();
 	}
 }
 
