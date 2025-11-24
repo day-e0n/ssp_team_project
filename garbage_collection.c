@@ -231,32 +231,49 @@
 
 	#define GC_SCHED_INTERVAL_TICK 100000
 	#define GC_PAGE_LIMIT 8
-	#define GC_TRIGGER_FREE_BLOCK_THRESHOLD 128
+	#define GC_TRIGGER_FREE_BLOCK_THRESHOLD 1950
 
 	P_GC_VICTIM_MAP gcVictimMapPtr;
 	INCREMENTAL_GC_CONTEXT gcCtx[USER_DIES];
 
 	int NeedGc(unsigned int dieNo)
 	{
-		xil_printf("[DBG] Die %d freeBlockCnt=%d\n", dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
+		static unsigned int tick = 0;
+	    tick++;
+		if (tick % 100000 == 0)
+		    xil_printf("[DBG] Die %d freeBlockCnt=%d\n", dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
 		return (virtualDieMapPtr->die[dieNo].freeBlockCnt <= GC_TRIGGER_FREE_BLOCK_THRESHOLD);
 	}
 
 	void GcScheduler()
 	{
-		static unsigned int tick = 0;
-		tick++;
+	    static unsigned int tick = 0;
+	    static unsigned int logTick = 0;   // 로그 출력용 별도 tick
 
-		if (tick % GC_SCHED_INTERVAL_TICK == 0)
-		{
-			for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
-			{
-				if (gcCtx[dieNo].active)
-					GarbageCollection(dieNo);
-				else if (NeedGc(dieNo))
-					GarbageCollection(dieNo);
-			}
-		}
+	    tick++;
+	    logTick++;
+
+	    if (tick % 1000 == 0)
+	    {
+	        for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+	        {
+	            if (gcCtx[dieNo].active)
+	                GarbageCollection(dieNo);
+	            else if (NeedGc(dieNo))
+	                GarbageCollection(dieNo);
+	        }
+	    }
+
+	    if (logTick % 100000 == 0)
+	    {
+	        for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+	        {
+	            xil_printf("[DBG][LOG] Die %d freeBlockCnt=%d, GC state=%d\r\n",
+	                       dieNo,
+	                       virtualDieMapPtr->die[dieNo].freeBlockCnt,
+	                       gcCtx[dieNo].state);
+	        }
+	    }
 	}
 
 	void TriggerGc(unsigned int dieNo)
@@ -398,6 +415,14 @@
 		unsigned int evictedBlockNo;
 		int invalidSliceCnt;
 
+		if (virtualDieMapPtr->die[dieNo].freeBlockCnt > GC_TRIGGER_FREE_BLOCK_THRESHOLD)
+		{
+		    xil_printf("[IGC][INFO] Skip GC: FreeBlocks(%d) > Threshold(%d)\r\n",
+					   virtualDieMapPtr->die[dieNo].freeBlockCnt,
+					   GC_TRIGGER_FREE_BLOCK_THRESHOLD);
+			return BLOCK_NONE;
+		}
+
 		for (invalidSliceCnt = SLICES_PER_BLOCK; invalidSliceCnt > 0; invalidSliceCnt--)
 		{
 			if (gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock != BLOCK_NONE)
@@ -419,8 +444,9 @@
 			}
 		}
 
-		assert(!"[WARNING] There are no free blocks. Abort terminate this ssd. [WARNING]");
-		return BLOCK_FAIL;
+		xil_printf("[IGC][WARN] No victim block available (Die %d, FreeBlocks=%d)\r\n",
+		               dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
+		return BLOCK_NONE;
 	}
 
 	void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
