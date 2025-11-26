@@ -188,10 +188,11 @@ void nvme_main()
 		{
 			CheckDoneNvmeDmaReq();
 			SchedulingNandReq();
-			
+
 		}
 
-		GcScheduler();
+		//GcScheduler();
+		CheckAndRunStwGc();
 	}
 }
 
