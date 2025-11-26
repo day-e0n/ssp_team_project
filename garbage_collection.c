@@ -87,16 +87,19 @@ void InitGcVictimMap()
 //////////////////////////////////////////////////////////////////////////////////
 void CheckAndRunStwGc(void)
 {
-    int needGc = 0;
+	static unsigned int tick = 0;
+	int needGc = 0;
 
-    for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
-    {
-        if (virtualDieMapPtr->die[dieNo].freeBlockCnt <= GC_TRIGGER_THRESHOLD)
-        {
-            needGc = 1;
-            break;
-        }
-    }
+	tick++;
+
+	if (tick % 100000 == 0)
+	{
+		for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+		{
+			xil_printf("  Die %d: freeBlockCnt=%d\r\n",
+					   dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
+		}
+	}
 
     if (needGc)
     {
@@ -109,8 +112,12 @@ void CheckAndRunStwGc(void)
             xil_printf("[STW_GC] Die %d: freeBlockCnt=%d\r\n",
                        dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
 
-            while (virtualDieMapPtr->die[dieNo].freeBlockCnt <= GC_TRIGGER_THRESHOLD + 50)
+            while (1)
             {
+                unsigned int victimBlock = GetFromGcVictimList(dieNo);
+                if (victimBlock == BLOCK_NONE)
+                    break;
+
                 GarbageCollection(dieNo);
             }
 
