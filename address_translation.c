@@ -48,6 +48,7 @@
 #include <assert.h>
 #include "memory_map.h"
 #include "xil_printf.h"
+#include "garbage_collection.h"
 
 P_LOGICAL_SLICE_MAP logicalSliceMapPtr;
 P_VIRTUAL_SLICE_MAP virtualSliceMapPtr;
@@ -88,7 +89,7 @@ void InitAddressMap()
 }
 
 void InitSliceMap()
-{	
+{
 	int sliceAddr;
 	for(sliceAddr=0; sliceAddr<SLICES_PER_SSD ; sliceAddr++)
 	{
@@ -661,7 +662,6 @@ unsigned int AddrTransWrite(unsigned int logicalSliceAddr)
 }
 
 
-/*
 unsigned int FindFreeVirtualSlice()
 {
 	unsigned int currentBlock, virtualSliceAddr, dieNo;
@@ -677,14 +677,10 @@ unsigned int FindFreeVirtualSlice()
 			virtualDieMapPtr->die[dieNo].currentBlock = currentBlock;
 		else
 		{
-			//GarbageCollection(dieNo); // Original_GC 사용 시 주석 해제
-			
-			// Game GC 사용 시 주석 해제 (2줄만) 
-			TriggerGc(dieNo);
-			xil_printf("[IGC] Triggered GC for Die %d\r\n", dieNo);
-
+			GarbageCollection(dieNo);
+			//TriggerGc(dieNo);
+			//xil_printf("[IGC] Triggered GC for Die %d\r\n", dieNo);
 			currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
-
 
 			if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage == USER_PAGES_PER_BLOCK)
 			{
@@ -709,73 +705,6 @@ unsigned int FindFreeVirtualSlice()
 	return virtualSliceAddr;
 }
 
-*/
-
-//수정한 부분
-unsigned int FindFreeVirtualSlice()
-{
-	unsigned int currentBlock, virtualSliceAddr, dieNo;
-
-	dieNo = sliceAllocationTargetDie;
-	currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
-
-	if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage == USER_PAGES_PER_BLOCK)
-	{
-		// ✅ 1단계: 꽉 찬 블록을 GC victim list에 추가
-		if(virtualBlockMapPtr->block[dieNo][currentBlock].invalidSliceCnt > 0)
-		{
-			PutToGcVictimList(dieNo, currentBlock, 
-				virtualBlockMapPtr->block[dieNo][currentBlock].invalidSliceCnt);
-		}
-		
-		// ✅ 2단계: 새 블록 요청
-		currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
-
-		if(currentBlock != BLOCK_FAIL)
-		{
-			virtualDieMapPtr->die[dieNo].currentBlock = currentBlock;
-		}
-		else
-		{
-			// ✅ 3단계: 블록이 없으면 GC 실행
-			TriggerGc(dieNo);
-			xil_printf("[IGC] Triggered GC for Die %d\r\n", dieNo);
-
-			// ✅ 4단계: GC 후 반드시 새 블록 받기
-			currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
-			
-			if(currentBlock != BLOCK_FAIL)
-			{
-				virtualDieMapPtr->die[dieNo].currentBlock = currentBlock;
-			}
-			else
-			{
-				// GC 후에도 블록이 없으면 다시 확인
-				currentBlock = virtualDieMapPtr->die[dieNo].currentBlock;
-
-				if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage == USER_PAGES_PER_BLOCK)
-				{
-					currentBlock = GetFromFbList(dieNo, GET_FREE_BLOCK_NORMAL);
-					if(currentBlock != BLOCK_FAIL)
-						virtualDieMapPtr->die[dieNo].currentBlock = currentBlock;
-					else
-						assert(!"[WARNING] There is no available block [WARNING]");
-				}
-				else if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage > USER_PAGES_PER_BLOCK)
-					assert(!"[WARNING] Current page management fail [WARNING]");
-			}
-		}
-	}
-	else if(virtualBlockMapPtr->block[dieNo][currentBlock].currentPage > USER_PAGES_PER_BLOCK)
-		assert(!"[WARNING] Current page management fail [WARNING]");
-
-
-	virtualSliceAddr = Vorg2VsaTranslation(dieNo, currentBlock, virtualBlockMapPtr->block[dieNo][currentBlock].currentPage);
-	virtualBlockMapPtr->block[dieNo][currentBlock].currentPage++;
-	sliceAllocationTargetDie = FindDieForFreeSliceAllocation();
-	
-	return virtualSliceAddr;
-}
 
 unsigned int FindFreeVirtualSliceForGc(unsigned int copyTargetDieNo, unsigned int victimBlockNo)
 {
