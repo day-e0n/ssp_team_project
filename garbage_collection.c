@@ -101,6 +101,15 @@ void CheckAndRunStwGc(void)
 		}
 	}
 
+    for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+    {
+        if (virtualDieMapPtr->die[dieNo].freeBlockCnt <= GC_TRIGGER_THRESHOLD)
+        {
+            needGc = 1;
+            break;
+        }
+    }
+
     if (needGc)
     {
         xil_printf("\r\n[STW_GC] Triggered at freeBlockCnt <= %d\r\n", GC_TRIGGER_THRESHOLD);
