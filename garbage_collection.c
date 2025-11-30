@@ -47,8 +47,8 @@
 //////////////////////////////////////////////////////////////////////////////////
 
 // #define ORIGINAL_GC // wdy: original GC 활성화
-#define ORIGINAL_GC // wdy: GAME GC 활성화
-// #define CB_GC // wdy: Cost_Benefit GC 활성화
+// #define ORIGINAL_GC // wdy: GAME GC 활성화
+#define CB_GC // wdy: Cost_Benefit GC 활성화
 
 #if defined(ORIGINAL_GC)
 
@@ -570,6 +570,10 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 	// 전방 선언 (외부 인터페이스 유지)
 	static inline uint32_t CalculateCostBenefitScore(unsigned int dieNo, unsigned int blockNo);
 	static inline void DetachBlockFromGcList(unsigned int dieNo, unsigned int blockNo);
+    /* Forward declaration to avoid implicit non-static declaration when
+     * `ValidatePostErase` is called before its static definition below.
+     */
+    static void ValidatePostErase(unsigned int dieNo, unsigned int blockNo);
 
 	// 외부 모듈의 헬퍼 함수들 (수정 없음)
 	// extern unsigned int Vorg2VsaTranslation(unsigned int dieNo, unsigned int blockNo, unsigned int pageNo);
@@ -603,6 +607,24 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 				gcLastEraseTick[dieNo][blockNo] = 0;
 		}
 	}
+
+    /*
+     * Provide a public CheckAndRunStwGc() symbol for builds that call
+     * it unconditionally (e.g., in `nvme_main.c`). The CB_GC variant
+     * implements a different GC policy; offer a small, non-invasive
+     * implementation that advances the internal tick. This satisfies
+     * the linker when the full STW GC routine is not compiled.
+     */
+    void CheckAndRunStwGc(void)
+    {
+        gcActivityTick++;
+        /*
+         * No immediate action here: CB_GC scheduling is handled elsewhere
+         * (or could be invoked periodically). Keeping this lightweight
+         * prevents unexpected work in hot paths while resolving the
+         * undefined reference at link time.
+         */
+    }
 		// ----------------------------- 메인 GC 루틴 -------------------------------
 	void GarbageCollection(unsigned int dieNo)
 	{
