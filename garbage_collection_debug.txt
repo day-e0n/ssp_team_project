@@ -1,0 +1,68 @@
+-----------------------------------------------------------------------------------------------------------
+original_gc는 다음과 같은 흐름으로 로그를 출력한다.
+
+    100,000 tick마다 두 칸 공백으로 시작하는 die/free-block 상태 라인을 출력한다
+    (garbage_collection.c 96라인)
+
+    GC 트리거 시
+    [STW_GC] Triggered 출력
+    (112라인)
+
+    각 die에 대해 선택된 victim 블록을 출력
+    (121라인)
+
+    GarbageCollection에 진입할 때
+    [STW_GC] GC start... 출력
+    (138라인)
+
+    GC 종료 시
+    [STW_GC] Erased... 출력
+    (190라인)
+
+    경고는
+    [STW_GC][WARN] ...\r\n
+    형식으로 출력
+    (242라인)
+
+-----------------------------------------------------------------------------------------------------------
+game_gc는 동일한 라이프사이클을 자체 상태머신 구조에서 구현한다.
+    [DBG] Die... 형태의 상태 라인 출력 (298라인)
+    [DBG][LOG] 주기 요약 출력 (334라인)
+    수동 트리거 시 [IGC] Triggered manually (351라인)
+    [IGC] -> SELECT_VICTIM 단계 전환 (386라인)
+    [IGC] Victim selected... (399라인)
+    [IGC] Erased block... (447라인)
+    victim이 없으면 [IGC][WARN] (502라인)
+    
+모든 라이프사이클 로그는 \r\n을 사용한다.
+
+-----------------------------------------------------------------------------------------------------------
+Cost-Benefit GC 로그 패턴 (garbage_collection.c)
+
+    Status/Trigger
+        xil_printf("  Die %d: freeBlockCnt=%d\r\n", ...) (garbage_collection.c (line 614)) – 동일한 두 칸 들여쓰기와 \r\n 사용으로 die/free-block 상태를 먼저 출력.
+        xil_printf("[CB_GC] Triggered\r\n") (garbage_collection.c (line 616)) – STW/IGC와 같은 “Triggered” 선언, 접두사는 [CB_GC].
+    
+    Victim 선택 직후
+        xil_printf("[CB_GC] Die %d victim=%d\r\n", ...) (garbage_collection.c (line 622)) – die별 victim 블록 번호 보고.
+        xil_printf("[CB_GC] GC start die=%d block=%d\r\n", ...) (garbage_collection.c (line 623)) – 실제 GC 루틴 진입 알림.
+    
+    GC 진행 및 완료
+        내부 진행 상황은 GC_DBG 매크로에 [CB_GC][DBG] 접두사를 붙여 출력(garbage_collection.c (line 700), garbage_collection.c (line 709), garbage_collection.c (line 720), 등) → 이동 페이지 수, tick 증가, 선택된 victim, 검증 통계 등이 모두 \r\n으로 끝난다.
+        xil_printf("[CB_GC] Erased die=%d block=%d\r\n", ...) (garbage_collection.c (line 704)) – 블록 erase 완료 보고.
+    
+    경고/에러
+        victim 부재 시 xil_printf("[CB_GC][WARN] No victim block available on die %d\r\n", ...) (garbage_collection.c (line 874)) – 다른 정책과 동일한 [...][WARN] 구조.
+        매핑 불일치·post-erase 이상 등은 [CB_GC][ERROR] ...\r\n 패턴으로 GC_DBG를 통해 출력 (garbage_collection.c (line 694), garbage_collection.c (line 784), garbage_collection.c (line 789), garbage_collection.c (line 797) 등).
+    
+    줄바꿈 규칙
+        xil_printf와 GC_DBG 모두 \r\n으로 종료하며, 기존 두 정책의 스타일과 일치.
+        
+    라이프사이클 순서
+        상태 출력 (garbage_collection.c (line 614))
+        Trigger 메시지 (garbage_collection.c (line 616))
+        Victim 선택 로그 (garbage_collection.c (line 622))
+        GC 시작 로그 (garbage_collection.c (line 623))
+        필요 시 내부 디버그/검증 로그 (garbage_collection.c (lines 694-809))
+        Erase 완료 로그 (garbage_collection.c (line 704))
+        Warning/에러 조건 처리 (garbage_collection.c (line 874) 및 다양한 [ERROR] 출력)

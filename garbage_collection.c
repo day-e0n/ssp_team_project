@@ -611,8 +611,16 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 		unsigned int movedLogical[USER_PAGES_PER_BLOCK];
 		unsigned int movedDestVsa[USER_PAGES_PER_BLOCK];
 
+		xil_printf("  Die %d: freeBlockCnt=%d\r\n",
+				dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
+		xil_printf("[CB_GC] Triggered\r\n");
+
 		victimBlockNo = GetFromGcVictimList(dieNo);
-		GC_DBG("[GC] Start GC: die=%d victim=%d tick=%d\n", dieNo, victimBlockNo, gcActivityTick);
+		if (victimBlockNo == BLOCK_FAIL)
+			return;
+
+		xil_printf("[CB_GC] Die %d victim=%d\r\n", dieNo, victimBlockNo);
+		xil_printf("[CB_GC] GC start die=%d block=%d\r\n", dieNo, victimBlockNo);
 		dieNoForGcCopy = dieNo;
 
 		/* 유효 페이지가 있으면 이동 수행 */
@@ -683,20 +691,22 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 				unsigned int vsa = movedDestVsa[i];
 				if (logicalSliceMapPtr->logicalSlice[lsa].virtualSliceAddr != vsa)
 				{
-					GC_DBG("[GC-ERROR] Mapping mismatch after GC die=%d victim=%d lsa=%d expected_vsa=%d actual_vsa=%d\n",
+					GC_DBG("[CB_GC][ERROR] Mapping mismatch after GC die=%d victim=%d lsa=%d expected_vsa=%d actual_vsa=%d\r\n",
 							dieNo, victimBlockNo, lsa, vsa, logicalSliceMapPtr->logicalSlice[lsa].virtualSliceAddr);
 				}
 			}
 		}
 
-		GC_DBG("[GC] Moved %d pages during GC die=%d victim=%d\n", movedPages, dieNo, victimBlockNo);
+		GC_DBG("[CB_GC][DBG] Moved %d pages during GC die=%d victim=%d\r\n", movedPages, dieNo, victimBlockNo);
 
 		EraseBlock(dieNo, victimBlockNo);
+
+		xil_printf("[CB_GC] Erased die=%d block=%d\r\n", dieNo, victimBlockNo);
 
 		/* 즉시 재선택 방지를 위해 erase 시각 기록 */
 		gcLastEraseTick[dieNo][victimBlockNo] = gcActivityTick;
 		gcCount++;
-		GC_DBG("[GC] Erased die=%d block=%d total_gc_count=%d\n", dieNo, victimBlockNo, gcCount);
+		GC_DBG("[CB_GC][DBG] Erase count die=%d block=%d total_gc_count=%d\r\n", dieNo, victimBlockNo, gcCount);
 		/* erase 후 상태 검증 */
 		ValidatePostErase(dieNo, victimBlockNo);
 	}
@@ -707,7 +717,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 		SelectiveGetFromGcVictimList(dieNo, blockNo);
 		virtualBlockMapPtr->block[dieNo][blockNo].nextBlock = BLOCK_NONE;
 		virtualBlockMapPtr->block[dieNo][blockNo].prevBlock = BLOCK_NONE;
-		GC_DBG("[GC] Detached block die=%d block=%d\n", dieNo, blockNo);
+		GC_DBG("[CB_GC][DBG] Detached block die=%d block=%d\r\n", dieNo, blockNo);
 	}
 
 	// --------------------------- Cost-Benefit Scoring ----------------------------
@@ -733,7 +743,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 		unsigned int validSlices = USER_PAGES_PER_BLOCK - invalidSlices;
 		unsigned int ageTicks = gcActivityTick - gcLastEraseTick[dieNo][blockNo];
 		uint32_t score = CalculateCostBenefitScore(dieNo, blockNo);
-		GC_DBG("[GC-STAT] die=%d block=%d invalid=%u valid=%u age=%u score=%u\n",
+		GC_DBG("[CB_GC][STAT] die=%d block=%d invalid=%u valid=%u age=%u score=%u\r\n",
 				dieNo, blockNo, invalidSlices, validSlices, ageTicks, score);
 	}
 
@@ -749,7 +759,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 				uint32_t score = CalculateCostBenefitScore(dieNo, blockNo);
 				if (score > selectedScore)
 				{
-					GC_DBG("[GC-ERROR] Found higher score than selected: die=%d candidate=%d score=%u selected=%d selscore=%u\n",
+					GC_DBG("[CB_GC][ERROR] Found higher score than selected: die=%d candidate=%d score=%u selected=%d selscore=%u\r\n",
 							dieNo, blockNo, score, selectedBlock, selectedScore);
 					DumpGcStatsForBlock(dieNo, blockNo);
 					DumpGcStatsForBlock(dieNo, selectedBlock);
@@ -771,12 +781,12 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 
 		if (invalidCnt != 0)
 		{
-			GC_DBG("[GC-ERROR] Post-erase invalidSliceCnt != 0 die=%d block=%d invalid=%u\n", dieNo, blockNo, invalidCnt);
+			GC_DBG("[CB_GC][ERROR] Post-erase invalidSliceCnt != 0 die=%d block=%d invalid=%u\r\n", dieNo, blockNo, invalidCnt);
 		}
 
 		if ((next != BLOCK_NONE) || (prev != BLOCK_NONE))
 		{
-			GC_DBG("[GC-ERROR] Post-erase next/prev not cleared die=%d block=%d next=%d prev=%d\n", dieNo, blockNo, next, prev);
+			GC_DBG("[CB_GC][ERROR] Post-erase next/prev not cleared die=%d block=%d next=%d prev=%d\r\n", dieNo, blockNo, next, prev);
 		}
 
 		for (pageNo = 0; pageNo < USER_PAGES_PER_BLOCK; pageNo++)
@@ -784,7 +794,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 			vsa = Vorg2VsaTranslation(dieNo, blockNo, pageNo);
 			if (virtualSliceMapPtr->virtualSlice[vsa].logicalSliceAddr != LSA_NONE)
 			{
-				GC_DBG("[GC-ERROR] Post-erase virtualSlice not cleared die=%d block=%d page=%d vsa=%d logical=%d\n",
+				GC_DBG("[CB_GC][ERROR] Post-erase virtualSlice not cleared die=%d block=%d page=%d vsa=%d logical=%d\r\n",
 						dieNo, blockNo, pageNo, vsa, virtualSliceMapPtr->virtualSlice[vsa].logicalSliceAddr);
 			}
 		}
@@ -796,7 +806,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 		if (invalidSliceCnt)    // age as logical counter
 		{
 			gcActivityTick++; // advance logical time
-			GC_DBG("[GC] tick++ die=%d block=%d invalid=%d tick=%d\n", dieNo, blockNo, invalidSliceCnt, gcActivityTick);
+			GC_DBG("[CB_GC][DBG] tick++ die=%d block=%d invalid=%d tick=%d\r\n", dieNo, blockNo, invalidSliceCnt, gcActivityTick);
 		}
 
 		if (gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock != BLOCK_NONE)
@@ -850,7 +860,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 				unsigned int invalidSlices = virtualBlockMapPtr->block[dieNo][bestBlock].invalidSliceCnt;
 				unsigned int validSlices = USER_PAGES_PER_BLOCK - invalidSlices;
 				unsigned int ageTicks = gcActivityTick - gcLastEraseTick[dieNo][bestBlock];
-				GC_DBG("[GC] Selected victim die=%d block=%d score=%u invalid=%u valid=%u age=%u tick=%u\n",
+				GC_DBG("[CB_GC][DBG] Selected victim die=%d block=%d score=%u invalid=%u valid=%u age=%u tick=%u\r\n",
 						dieNo, bestBlock, bestScore, invalidSlices, validSlices, ageTicks, gcActivityTick);
 			}
 
@@ -861,6 +871,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 		}
 		else
 		{
+			xil_printf("[CB_GC][WARN] No victim block available on die %d\r\n", dieNo);
 			assert(!"[WARNING] There are no free blocks. Abort terminate this ssd. [WARNING]");
 		}
 
