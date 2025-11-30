@@ -66,3 +66,40 @@ Cost-Benefit GC 로그 패턴 (garbage_collection.c)
         필요 시 내부 디버그/검증 로그 (garbage_collection.c (lines 694-809))
         Erase 완료 로그 (garbage_collection.c (line 704))
         Warning/에러 조건 처리 (garbage_collection.c (line 874) 및 다양한 [ERROR] 출력)
+
+
+1. STW_GC (Stop-The-World Garbage Collection)
+관련 태그: [STW_GC]
+발생 가능한 xil_printf 출력:
+[STW_GC] Triggered\r\n (GC가 트리거될 때)
+[STW_GC] Die %d victim=%d\r\n (희생 블록 선택 시)
+[STW_GC] GC start die=%d block=%d\r\n (GC 작업 시작 시)
+[STW_GC] Erased die=%d block=%d\r\n (GC 작업 완료 후)
+[STW_GC][WARN] No victim block available on die %d\r\n (희생 블록이 없을 때)
+주기적 출력:
+tick % 100000 == 0 조건에서:
+Die %d: freeBlockCnt=%d\r\n (각 다이의 freeBlockCnt 상태 출력)
+
+2. CB_GC (Cost-Benefit Garbage Collection)
+관련 태그: [CB_GC]
+발생 가능한 xil_printf 출력:
+[CB_GC] Triggered\r\n (GC가 트리거될 때)
+[CB_GC] Die %d victim=%d\r\n (희생 블록 선택 시)
+[CB_GC] GC start die=%d block=%d\r\n (GC 작업 시작 시)
+[CB_GC] Moved %d pages from die=%d block=%d\r\n (페이지 이동 완료 시)
+[CB_GC][WARN] No valid pages to move from die=%d block=%d\r\n (이동할 유효 페이지가 없을 때)
+[CB_GC] GC completed for die=%d block=%d\r\n (GC 작업 완료 후)
+주기적 출력:
+gcActivityTick % 100000 == 0 조건에서:
+[CB_GC][DEBUG] Die %d: freeBlockCnt=%d\r\n (각 다이의 freeBlockCnt 상태 출력)
+
+3. IGC (Incremental Garbage Collection)
+관련 태그: [IGC]
+발생 가능한 xil_printf 출력:
+[IGC] Triggered manually (Die %d)\r\n (수동으로 GC 트리거 시)
+[IGC] -> SELECT_VICTIM (Die %d)\r\n (희생 블록 선택 단계)
+[IGC] Victim selected (Die %d, Block %d)\r\n (희생 블록 선택 완료)
+[IGC] Erased block (Die %d, Block %d)\r\n (GC 작업 완료 후)
+[IGC][WARN] No victim block available (Die %d, FreeBlocks=%d)\r\n (희생 블록이 없을 때)
+주기적 출력:
+현재 tick 기반 주기적 출력은 정의되지 않음.

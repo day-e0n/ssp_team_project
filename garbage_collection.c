@@ -57,7 +57,7 @@
 #include <assert.h>
 #include "memory_map.h"
 
-#define GC_TRIGGER_THRESHOLD 1970
+#define GC_TRIGGER_THRESHOLD 1990
 
 P_GC_VICTIM_MAP gcVictimMapPtr;
 unsigned int gcTriggered;
@@ -272,6 +272,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
         gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = BLOCK_NONE;
     }
 }
+
 #elif defined(GAME_GC)
 
 #include "xil_printf.h"
@@ -543,18 +544,22 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 	#include "memory_map.h"
 	#include <stdint.h>     // [CB] for fixed-width integers
 
-	#if 1
-	// 런타임 디버그 출력 토글
-	static int gcDebugRuntime = 1;
-	static inline void SetGcDebugRuntime(int on) { gcDebugRuntime = on; }
-	#define GC_DBG(...) do { if (gcDebugRuntime) xil_printf(__VA_ARGS__); } while(0)
-	#endif
+    /* CB_GC trigger threshold (event-driven). Adjust as needed. */
+    #define CB_GC_TRIGGER_THRESHOLD 1990
+
+    #if 1
+    // 디버그 출력을 항상 활성화: 매크로는 조건 없이 출력합니다.
+    #define GC_DBG(...) xil_printf(__VA_ARGS__)
+    #endif
 
 	P_GC_VICTIM_MAP gcVictimMapPtr;
 
 	// 외부 인터페이스와의 호환성을 위한 변수들
 	unsigned int gcTriggered;
 	unsigned int copyCnt;
+
+    /* Per-die global victim holder to mirror ORIGINAL_GC semantics */
+    unsigned int globalVictimBlock[USER_DIES];
 
 	// -------------------------- GC 정책 선택 ------------------------------
 	// Cost-Benefit 정책만 지원합니다. 레거시 GREEDY 모드는 제거되었습니다.
@@ -605,6 +610,9 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 			/* 모든 블록의 마지막 erase 시각 초기화 */
 			for (blockNo = 0; blockNo < USER_BLOCKS_PER_DIE; blockNo++)
 				gcLastEraseTick[dieNo][blockNo] = 0;
+
+            /* initialize per-die global victim like ORIGINAL_GC */
+            globalVictimBlock[dieNo] = BLOCK_NONE;
 		}
 	}
 
@@ -617,13 +625,45 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
      */
     void CheckAndRunStwGc(void)
     {
-        gcActivityTick++;
-        /*
-         * No immediate action here: CB_GC scheduling is handled elsewhere
-         * (or could be invoked periodically). Keeping this lightweight
-         * prevents unexpected work in hot paths while resolving the
-         * undefined reference at link time.
-         */
+        static unsigned int tick = 0;
+        int needGc = 0;
+
+        tick++;
+
+        if (tick % 100000 == 0)
+        {
+            for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+            {
+                xil_printf("  Die %d: freeBlockCnt=%d\r\n",
+                           dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
+            }
+        }
+
+        for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+        {
+            if (virtualDieMapPtr->die[dieNo].freeBlockCnt <= CB_GC_TRIGGER_THRESHOLD)
+            {
+                needGc = 1;
+                break;
+            }
+        }
+
+        if (needGc)
+        {
+            xil_printf("[CB_GC] Triggered\r\n");
+
+            for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+            {
+                unsigned int victimBlock = GetFromGcVictimList(dieNo);
+
+                if (victimBlock != BLOCK_FAIL)
+                {
+                    globalVictimBlock[dieNo] = victimBlock;
+                    xil_printf("[CB_GC] Die %d victim=%d\r\n", dieNo, victimBlock);
+                    GarbageCollection(dieNo);
+                }
+            }
+        }
     }
 		// ----------------------------- 메인 GC 루틴 -------------------------------
 	void GarbageCollection(unsigned int dieNo)
@@ -633,13 +673,19 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 		unsigned int movedLogical[USER_PAGES_PER_BLOCK];
 		unsigned int movedDestVsa[USER_PAGES_PER_BLOCK];
 
-		xil_printf("  Die %d: freeBlockCnt=%d\r\n",
-				dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
-		xil_printf("[CB_GC] Triggered\r\n");
+        /* prefer a globalVictimBlock if set by the scheduler (ORIGINAL style) */
+        victimBlockNo = globalVictimBlock[dieNo];
+        if (victimBlockNo == BLOCK_NONE || victimBlockNo == BLOCK_FAIL)
+        {
+            /* fallback: select via CB scoring */
+            victimBlockNo = GetFromGcVictimList(dieNo);
+            if (victimBlockNo == BLOCK_FAIL)
+                return;
+        }
 
-		victimBlockNo = GetFromGcVictimList(dieNo);
-		if (victimBlockNo == BLOCK_FAIL)
-			return;
+        xil_printf("  Die %d: freeBlockCnt=%d\r\n",
+                dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
+        xil_printf("[CB_GC] Triggered\r\n");
 
 		xil_printf("[CB_GC] Die %d victim=%d\r\n", dieNo, victimBlockNo);
 		xil_printf("[CB_GC] GC start die=%d block=%d\r\n", dieNo, victimBlockNo);
@@ -723,7 +769,9 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 
 		EraseBlock(dieNo, victimBlockNo);
 
-		xil_printf("[CB_GC] Erased die=%d block=%d\r\n", dieNo, victimBlockNo);
+        xil_printf("[CB_GC] Erased die=%d block=%d\r\n", dieNo, victimBlockNo);
+        /* mirror ORIGINAL: clear the global victim pointer for this die */
+        globalVictimBlock[dieNo] = BLOCK_NONE;
 
 		/* 즉시 재선택 방지를 위해 erase 시각 기록 */
 		gcLastEraseTick[dieNo][victimBlockNo] = gcActivityTick;
@@ -731,6 +779,16 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 		GC_DBG("[CB_GC][DBG] Erase count die=%d block=%d total_gc_count=%d\r\n", dieNo, victimBlockNo, gcCount);
 		/* erase 후 상태 검증 */
 		ValidatePostErase(dieNo, victimBlockNo);
+
+		/* 추가 디버깅 출력: GC 작업 완료 */
+		if (movedPages > 0) {
+			xil_printf("[CB_GC] Moved %d pages from die=%d block=%d\r\n", movedPages, dieNo, victimBlockNo);
+		} else {
+			xil_printf("[CB_GC][WARN] No valid pages to move from die=%d block=%d\r\n", dieNo, victimBlockNo);
+		}
+
+		/* 추가 디버깅 출력: GC 종료 */
+		xil_printf("[CB_GC] GC completed for die=%d block=%d\r\n", dieNo, victimBlockNo);
 	}
 	// --------------------------- GC 리스트 조작 ----------------------------
 	// Detach helper: remove block from list and clear next/prev links
@@ -828,7 +886,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 		if (invalidSliceCnt)    // age as logical counter
 		{
 			gcActivityTick++; // advance logical time
-			GC_DBG("[CB_GC][DBG] tick++ die=%d block=%d invalid=%d tick=%d\r\n", dieNo, blockNo, invalidSliceCnt, gcActivityTick);
+            GC_DBG("[CB_GC][DBG] tick++ die=%d block=%d invalid=%d tick=%d\r\n", dieNo, blockNo, invalidSliceCnt, gcActivityTick);
 		}
 
 		if (gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock != BLOCK_NONE)
@@ -845,6 +903,25 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 			gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = blockNo;
 			gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = blockNo;
 		}
+
+        /* Event-driven automatic trigger: if free blocks drop below threshold,
+         * select a victim and run GC immediately for this die.
+         */
+        if (virtualDieMapPtr->die[dieNo].freeBlockCnt <= CB_GC_TRIGGER_THRESHOLD)
+        {
+            unsigned int victim = GetFromGcVictimList(dieNo);
+            if (victim != BLOCK_FAIL)
+            {
+                xil_printf("[CB_GC] Triggered by threshold (Die %d) freeBlockCnt=%d victim=%d\r\n",
+                        dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt, victim);
+                GarbageCollection(dieNo);
+            }
+            else
+            {
+                xil_printf("[CB_GC][WARN] No victim block available on die %d despite low freeBlockCnt=%d\r\n",
+                        dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
+            }
+        }
 	}
 
 	// Scan all candidates and pick the max (invalid*age)/(valid+1)
@@ -886,12 +963,46 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 						dieNo, bestBlock, bestScore, invalidSlices, validSlices, ageTicks, gcActivityTick);
 			}
 
-			// Validate the selected victim (debug)
-			ValidateVictimSelection(dieNo, bestBlock, bestScore);
+            /* Second-pass verification: re-scan candidates to protect against
+             * any race or scoring inconsistency between the initial selection and
+             * the moment of detachment. If a different block now has a higher
+             * score, promote it to the selected victim and log the change.
+             */
+            {
+                unsigned int recomputedBest = bestBlock;
+                uint32_t recomputedScore = bestScore;
+                int invalidSliceCnt2;
+                for (invalidSliceCnt2 = SLICES_PER_BLOCK; invalidSliceCnt2 > 0; invalidSliceCnt2--)
+                {
+                    unsigned int blockNo2 = gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt2].headBlock;
+                    while (blockNo2 != BLOCK_NONE)
+                    {
+                        unsigned int nextBlock2 = virtualBlockMapPtr->block[dieNo][blockNo2].nextBlock;
+                        uint32_t score2 = CalculateCostBenefitScore(dieNo, blockNo2);
+                        if (score2 > recomputedScore)
+                        {
+                            recomputedScore = score2;
+                            recomputedBest = blockNo2;
+                        }
+                        blockNo2 = nextBlock2;
+                    }
+                }
 
-			DetachBlockFromGcList(dieNo, bestBlock);
-		}
-		else
+                if (recomputedBest != bestBlock)
+                {
+                    GC_DBG("[CB_GC][WARN] Victim changed on re-scan die=%d old=%d oldScore=%u new=%d newScore=%u\r\n",
+                            dieNo, bestBlock, bestScore, recomputedBest, recomputedScore);
+                    bestBlock = recomputedBest;
+                    bestScore = recomputedScore;
+                }
+
+                // Validate the (final) selected victim (debug)
+                ValidateVictimSelection(dieNo, bestBlock, bestScore);
+
+                DetachBlockFromGcList(dieNo, bestBlock);
+            }
+        }
+        else
 		{
 			xil_printf("[CB_GC][WARN] No victim block available on die %d\r\n", dieNo);
 			assert(!"[WARNING] There are no free blocks. Abort terminate this ssd. [WARNING]");
