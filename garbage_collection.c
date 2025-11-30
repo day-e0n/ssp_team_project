@@ -570,6 +570,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 	// 전방 선언 (외부 인터페이스 유지)
 	static inline uint32_t CalculateCostBenefitScore(unsigned int dieNo, unsigned int blockNo);
 	static inline void DetachBlockFromGcList(unsigned int dieNo, unsigned int blockNo);
+	static void ValidatePostErase(unsigned int dieNo, unsigned int blockNo);
 
 	// 외부 모듈의 헬퍼 함수들 (수정 없음)
 	// extern unsigned int Vorg2VsaTranslation(unsigned int dieNo, unsigned int blockNo, unsigned int pageNo);
