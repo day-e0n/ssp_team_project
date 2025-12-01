@@ -1042,6 +1042,359 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 			gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = BLOCK_NONE;
 		}
 	}
+#elif defined(CBGAME_GC)   // Cost-Benefit + Incremental GC (GameGC 방식)
 
+#include "xil_printf.h"
+#include <assert.h>
+#include "memory_map.h"
+#include <stdint.h>
+
+#define CB_GC_TRIGGER_THRESHOLD 1990
+#define GC_PAGE_LIMIT 8     // incremental copy per cycle
+
+#define GC_DBG(...) xil_printf(__VA_ARGS__)
+
+P_GC_VICTIM_MAP gcVictimMapPtr;
+
+unsigned int gcTriggered;
+unsigned int copyCnt;
+unsigned int globalVictimBlock[USER_DIES];
+
+static unsigned int gcActivityTick;
+static unsigned int gcLastEraseTick[USER_DIES][USER_BLOCKS_PER_DIE];
+static unsigned int gcCount = 0;
+
+/* incremental state-machine */
+typedef struct {
+    unsigned int state;
+    unsigned int victimBlock;
+    unsigned int curPage;
+    unsigned char active;
+} CBGAME_GC_CTX;
+
+static CBGAME_GC_CTX cbCtx[USER_DIES];
+
+enum {
+    GC_STATE_IDLE = 0,
+    GC_STATE_SELECT_VICTIM,
+    GC_STATE_COPY_VALID_PAGES,
+    GC_STATE_ERASE_BLOCK
+};
+
+static inline uint32_t CalculateCostBenefitScore(unsigned int dieNo, unsigned int blockNo);
+static inline void DetachBlockFromGcList(unsigned int dieNo, unsigned int blockNo);
+static void ValidatePostErase(unsigned int dieNo, unsigned int blockNo);
+
+/* extern from FTL */
+extern unsigned int Vorg2VsaTranslation(unsigned int dieNo, unsigned int blockNo, unsigned int pageNo);
+extern void EraseBlock(unsigned int dieNo, unsigned int blockNo);
+extern unsigned int GetFromFreeReqQ(void);
+extern void SelectLowLevelReqQ(unsigned int reqSlotTag);
+extern unsigned int AllocateTempDataBuf(unsigned int dieNo);
+extern void UpdateTempDataBufEntryInfoBlockingReq(unsigned int entry, unsigned int reqSlotTag);
+extern unsigned int FindFreeVirtualSliceForGc(unsigned int dieNo, unsigned int victimBlockNo);
+
+/*===========================================================================*/
+/* Init */
+/*===========================================================================*/
+void InitGcVictimMap()
+{
+    int dieNo, invalidSliceCnt;
+    unsigned int blockNo;
+
+    gcActivityTick = 0;
+    gcVictimMapPtr = (P_GC_VICTIM_MAP)GC_VICTIM_MAP_ADDR;
+
+    for (dieNo = 0; dieNo < USER_DIES; dieNo++)
+    {
+        cbCtx[dieNo].state = GC_STATE_IDLE;
+        cbCtx[dieNo].victimBlock = BLOCK_NONE;
+        cbCtx[dieNo].curPage = 0;
+        cbCtx[dieNo].active = 0;
+
+        for (invalidSliceCnt = 0; invalidSliceCnt < SLICES_PER_BLOCK + 1; invalidSliceCnt++)
+        {
+            gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = BLOCK_NONE;
+            gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = BLOCK_NONE;
+        }
+
+        for (blockNo = 0; blockNo < USER_BLOCKS_PER_DIE; blockNo++)
+            gcLastEraseTick[dieNo][blockNo] = 0;
+
+        globalVictimBlock[dieNo] = BLOCK_NONE;
+    }
+}
+
+/*===========================================================================*/
+/* Victim selection*/
+/*===========================================================================*/
+unsigned int GetFromGcVictimList(unsigned int dieNo)
+{
+    unsigned int bestBlock = BLOCK_FAIL;
+    uint32_t bestScore = 0;
+    int invalidSliceCnt;
+
+    for (invalidSliceCnt = SLICES_PER_BLOCK; invalidSliceCnt > 0; invalidSliceCnt--)
+    {
+        unsigned int blockNo = gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock;
+        while (blockNo != BLOCK_NONE)
+        {
+            unsigned int nextBlock = virtualBlockMapPtr->block[dieNo][blockNo].nextBlock;
+
+            uint32_t score = CalculateCostBenefitScore(dieNo, blockNo);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestBlock = blockNo;
+            }
+
+            blockNo = nextBlock;
+        }
+    }
+
+    if (bestBlock == BLOCK_FAIL)
+    {
+        xil_printf("[CBGAME_GC][WARN] No victim block available on die %d\r\n", dieNo);
+        return BLOCK_FAIL;
+    }
+
+    {
+        unsigned int invalidSlices = virtualBlockMapPtr->block[dieNo][bestBlock].invalidSliceCnt;
+        unsigned int validSlices = USER_PAGES_PER_BLOCK - invalidSlices;
+        unsigned int ageTicks = gcActivityTick - gcLastEraseTick[dieNo][bestBlock];
+
+        GC_DBG("[CBGAME_GC][DBG] Selected victim die=%d block=%d score=%u invalid=%u valid=%u age=%u tick=%u\r\n",
+               dieNo, bestBlock, bestScore, invalidSlices, validSlices, ageTicks, gcActivityTick);
+    }
+
+    DetachBlockFromGcList(dieNo, bestBlock);
+    return bestBlock;
+}
+
+/*===========================================================================*/
+/* PutToGcVictimList */
+/*===========================================================================*/
+void PutToGcVictimList(unsigned int dieNo, unsigned int blockNo, unsigned int invalidSliceCnt)
+{
+    if (invalidSliceCnt)
+    {
+        gcActivityTick++;
+        GC_DBG("[CBGAME_GC][DBG] tick++ die=%d block=%d invalid=%d tick=%d\r\n",
+               dieNo, blockNo, invalidSliceCnt, gcActivityTick);
+    }
+
+    if (gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock != BLOCK_NONE)
+    {
+        virtualBlockMapPtr->block[dieNo][blockNo].prevBlock =
+            gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock;
+        virtualBlockMapPtr->block[dieNo][blockNo].nextBlock = BLOCK_NONE;
+        virtualBlockMapPtr->block[dieNo]
+            [gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock].nextBlock = blockNo;
+        gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = blockNo;
+    }
+    else
+    {
+        virtualBlockMapPtr->block[dieNo][blockNo].prevBlock = BLOCK_NONE;
+        virtualBlockMapPtr->block[dieNo][blockNo].nextBlock = BLOCK_NONE;
+        gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].headBlock = blockNo;
+        gcVictimMapPtr->gcVictimList[dieNo][invalidSliceCnt].tailBlock = blockNo;
+    }
+}
+
+/*===========================================================================*/
+/* Incremental Scheduler */
+/*===========================================================================*/
+void GcScheduler(void)
+{
+    static unsigned int tick = 0;
+    tick++;
+
+    if (tick % 1000 == 0)
+    {
+        for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+        {
+            if (cbCtx[dieNo].active)
+                GarbageCollection(dieNo);
+            else if (virtualDieMapPtr->die[dieNo].freeBlockCnt <= CB_GC_TRIGGER_THRESHOLD)
+                GarbageCollection(dieNo);
+        }
+    }
+
+    if (tick % 100000 == 0)
+    {
+        for (int dieNo = 0; dieNo < USER_DIES; dieNo++)
+        {
+            xil_printf("  Die %d: freeBlockCnt=%d\r\n",
+                       dieNo, virtualDieMapPtr->die[dieNo].freeBlockCnt);
+        }
+    }
+}
+
+/*===========================================================================*/
+/* Incremental GC*/
+/*===========================================================================*/
+void GarbageCollection(unsigned int dieNo)
+{
+    CBGAME_GC_CTX *ctx = &cbCtx[dieNo];
+    unsigned int pageNo, vsa, lsa, req;
+    unsigned int moved = 0;
+
+    switch (ctx->state)
+    {
+    case GC_STATE_IDLE:
+        ctx->state = GC_STATE_SELECT_VICTIM;
+        ctx->active = 1;
+        xil_printf("[CBGAME_GC] -> SELECT_VICTIM (Die %d)\r\n", dieNo);
+        break;
+
+    case GC_STATE_SELECT_VICTIM:
+        ctx->victimBlock = GetFromGcVictimList(dieNo);
+
+        if (ctx->victimBlock == BLOCK_FAIL)
+        {
+            xil_printf("[CBGAME_GC][WARN] No victim block available (Die %d)\r\n", dieNo);
+            ctx->state = GC_STATE_IDLE;
+            ctx->active = 0;
+            return;
+        }
+
+        xil_printf("[CBGAME_GC] Die %d victim=%d\r\n", dieNo, ctx->victimBlock);
+        xil_printf("[CBGAME_GC] GC start die=%d block=%d\r\n", dieNo, ctx->victimBlock);
+
+        ctx->curPage = 0;
+        ctx->state = GC_STATE_COPY_VALID_PAGES;
+        break;
+
+    case GC_STATE_COPY_VALID_PAGES:
+
+        moved = 0;
+
+        while (moved < GC_PAGE_LIMIT && ctx->curPage < USER_PAGES_PER_BLOCK)
+        {
+            pageNo = ctx->curPage++;
+            vsa = Vorg2VsaTranslation(dieNo, ctx->victimBlock, pageNo);
+            lsa = virtualSliceMapPtr->virtualSlice[vsa].logicalSliceAddr;
+
+            if (lsa != LSA_NONE &&
+                logicalSliceMapPtr->logicalSlice[lsa].virtualSliceAddr == vsa)
+            {
+                unsigned int newVsa = FindFreeVirtualSliceForGc(dieNo, ctx->victimBlock);
+                unsigned int tmp = AllocateTempDataBuf(dieNo);
+
+                req = GetFromFreeReqQ();
+                reqPoolPtr->reqPool[req].reqType = REQ_TYPE_NAND;
+                reqPoolPtr->reqPool[req].reqCode = REQ_CODE_READ;
+                reqPoolPtr->reqPool[req].nandInfo.virtualSliceAddr = vsa;
+                reqPoolPtr->reqPool[req].dataBufInfo.entry = tmp;
+                SelectLowLevelReqQ(req);
+
+                req = GetFromFreeReqQ();
+                reqPoolPtr->reqPool[req].reqType = REQ_TYPE_NAND;
+                reqPoolPtr->reqPool[req].reqCode = REQ_CODE_WRITE;
+                reqPoolPtr->reqPool[req].nandInfo.virtualSliceAddr = newVsa;
+                reqPoolPtr->reqPool[req].dataBufInfo.entry = tmp;
+                SelectLowLevelReqQ(req);
+
+                logicalSliceMapPtr->logicalSlice[lsa].virtualSliceAddr = newVsa;
+                virtualSliceMapPtr->virtualSlice[newVsa].logicalSliceAddr = lsa;
+
+                moved++;
+            }
+        }
+
+        if (ctx->curPage >= USER_PAGES_PER_BLOCK)
+            ctx->state = GC_STATE_ERASE_BLOCK;
+
+        break;
+
+    case GC_STATE_ERASE_BLOCK:
+
+        EraseBlock(dieNo, ctx->victimBlock);
+        xil_printf("[CBGAME_GC] Erased die=%d block=%d\r\n", dieNo, ctx->victimBlock);
+
+        ValidatePostErase(dieNo, ctx->victimBlock);
+
+        gcLastEraseTick[dieNo][ctx->victimBlock] = gcActivityTick;
+        gcCount++;
+
+        xil_printf("[CBGAME_GC] GC completed for die=%d block=%d\r\n",
+                   dieNo, ctx->victimBlock);
+
+        ctx->victimBlock = BLOCK_NONE;
+        ctx->state = GC_STATE_IDLE;
+        ctx->active = 0;
+
+        break;
+    }
+}
+
+/*===========================================================================*/
+/* Validation */
+/*===========================================================================*/
+static void ValidatePostErase(unsigned int dieNo, unsigned int blockNo)
+{
+    unsigned int pageNo, vsa;
+
+    if (virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt != 0)
+    {
+        GC_DBG("[CBGAME_GC][ERROR] Post-erase invalidSliceCnt != 0 die=%d block=%d\r\n",
+               dieNo, blockNo);
+    }
+
+    for (pageNo = 0; pageNo < USER_PAGES_PER_BLOCK; pageNo++)
+    {
+        vsa = Vorg2VsaTranslation(dieNo, blockNo, pageNo);
+
+        if (virtualSliceMapPtr->virtualSlice[vsa].logicalSliceAddr != LSA_NONE)
+        {
+            GC_DBG("[CBGAME_GC][ERROR] Post-erase VSA not cleared die=%d block=%d page=%d\r\n",
+                   dieNo, blockNo, pageNo);
+        }
+    }
+}
+
+/*===========================================================================*/
+/* DetachBlockFromGcList */
+/*===========================================================================*/
+static inline void DetachBlockFromGcList(unsigned int dieNo, unsigned int blockNo)
+{
+    SelectiveGetFromGcVictimList(dieNo, blockNo);
+    virtualBlockMapPtr->block[dieNo][blockNo].nextBlock = BLOCK_NONE;
+    virtualBlockMapPtr->block[dieNo][blockNo].prevBlock = BLOCK_NONE;
+
+    GC_DBG("[CBGAME_GC][DBG] Detached block die=%d block=%d\r\n",
+           dieNo, blockNo);
+}
+
+/*===========================================================================*/
+/* Selective removal */
+/*===========================================================================*/
+void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
+{
+    unsigned int next = virtualBlockMapPtr->block[dieNo][blockNo].nextBlock;
+    unsigned int prev = virtualBlockMapPtr->block[dieNo][blockNo].prevBlock;
+    unsigned int invalid = virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt;
+
+    if (next != BLOCK_NONE && prev != BLOCK_NONE)
+    {
+        virtualBlockMapPtr->block[dieNo][prev].nextBlock = next;
+        virtualBlockMapPtr->block[dieNo][next].prevBlock = prev;
+    }
+    else if (next == BLOCK_NONE && prev != BLOCK_NONE)
+    {
+        virtualBlockMapPtr->block[dieNo][prev].nextBlock = BLOCK_NONE;
+        gcVictimMapPtr->gcVictimList[dieNo][invalid].tailBlock = prev;
+    }
+    else if (next != BLOCK_NONE && prev == BLOCK_NONE)
+    {
+        virtualBlockMapPtr->block[dieNo][next].prevBlock = BLOCK_NONE;
+        gcVictimMapPtr->gcVictimList[dieNo][invalid].headBlock = next;
+    }
+    else
+    {
+        gcVictimMapPtr->gcVictimList[dieNo][invalid].headBlock = BLOCK_NONE;
+        gcVictimMapPtr->gcVictimList[dieNo][invalid].tailBlock = BLOCK_NONE;
+    }
+}
 
 #endif
