@@ -49,6 +49,7 @@
 // #define ORIGINAL_GC // wdy: original GC 활성화
 // #define ORIGINAL_GC // wdy: GAME GC 활성화
 #define CB_GC // wdy: Cost_Benefit GC 활성화
+//#define CBGAME_GC // wdy: Cost_Benefit + GAME GC 활성화
 
 #if defined(ORIGINAL_GC)
 
@@ -57,7 +58,7 @@
 #include <assert.h>
 #include "memory_map.h"
 
-#define GC_TRIGGER_THRESHOLD 1990
+#define GC_TRIGGER_THRESHOLD 512
 
 P_GC_VICTIM_MAP gcVictimMapPtr;
 unsigned int gcTriggered;
@@ -545,7 +546,7 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 	#include <stdint.h>     // [CB] for fixed-width integers
 
     /* CB_GC trigger threshold (event-driven). Adjust as needed. */
-    #define CB_GC_TRIGGER_THRESHOLD 1990
+    #define CB_GC_TRIGGER_THRESHOLD 512
 
     #if 1
     // 디버그 출력을 항상 활성화: 매크로는 조건 없이 출력합니다.
@@ -1048,8 +1049,9 @@ void SelectiveGetFromGcVictimList(unsigned int dieNo, unsigned int blockNo)
 #include <assert.h>
 #include "memory_map.h"
 #include <stdint.h>
+#include "address_translation.h"
 
-#define CB_GC_TRIGGER_THRESHOLD 1990
+#define CB_GC_TRIGGER_THRESHOLD 512
 #define GC_PAGE_LIMIT 8     // incremental copy per cycle
 
 #define GC_DBG(...) xil_printf(__VA_ARGS__)
@@ -1074,25 +1076,56 @@ typedef struct {
 
 static CBGAME_GC_CTX cbCtx[USER_DIES];
 
-enum {
-    GC_STATE_IDLE = 0,
-    GC_STATE_SELECT_VICTIM,
-    GC_STATE_COPY_VALID_PAGES,
-    GC_STATE_ERASE_BLOCK
-};
+//enum {
+//    GC_STATE_IDLE = 0,
+//    GC_STATE_SELECT_VICTIM,
+//    GC_STATE_COPY_VALID_PAGES,
+//    GC_STATE_ERASE_BLOCK
+//};
 
 static inline uint32_t CalculateCostBenefitScore(unsigned int dieNo, unsigned int blockNo);
 static inline void DetachBlockFromGcList(unsigned int dieNo, unsigned int blockNo);
 static void ValidatePostErase(unsigned int dieNo, unsigned int blockNo);
 
 /* extern from FTL */
-extern unsigned int Vorg2VsaTranslation(unsigned int dieNo, unsigned int blockNo, unsigned int pageNo);
+//extern unsigned int Vorg2VsaTranslation(unsigned int dieNo, unsigned int blockNo, unsigned int pageNo);
 extern void EraseBlock(unsigned int dieNo, unsigned int blockNo);
 extern unsigned int GetFromFreeReqQ(void);
 extern void SelectLowLevelReqQ(unsigned int reqSlotTag);
 extern unsigned int AllocateTempDataBuf(unsigned int dieNo);
 extern void UpdateTempDataBufEntryInfoBlockingReq(unsigned int entry, unsigned int reqSlotTag);
 extern unsigned int FindFreeVirtualSliceForGc(unsigned int dieNo, unsigned int victimBlockNo);
+
+
+
+	// --------------------------- Cost-Benefit Scoring ----------------------------
+	// Integer arithmetic; +1 guards avoid divide-by-zero
+	static inline uint32_t CalculateCostBenefitScore(unsigned int dieNo, unsigned int blockNo)
+	{
+		unsigned int invalidSlices = virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt;
+		unsigned int validSlices   = USER_PAGES_PER_BLOCK - invalidSlices;
+		unsigned int ageTicks      = gcActivityTick - gcLastEraseTick[dieNo][blockNo];
+		uint64_t benefit           = (uint64_t)invalidSlices * (uint64_t)(ageTicks + 1) * (uint64_t)USER_PAGES_PER_BLOCK;
+		uint64_t cost              = (uint64_t)(validSlices + 1);
+
+		if (cost == 0 || benefit == 0)
+			return (uint32_t)benefit;
+
+		return (uint32_t)(benefit / cost);
+	}
+
+	// Debug helper: print block stats and score
+	static void DumpGcStatsForBlock(unsigned int dieNo, unsigned int blockNo)
+	{
+		unsigned int invalidSlices = virtualBlockMapPtr->block[dieNo][blockNo].invalidSliceCnt;
+		unsigned int validSlices = USER_PAGES_PER_BLOCK - invalidSlices;
+		unsigned int ageTicks = gcActivityTick - gcLastEraseTick[dieNo][blockNo];
+		uint32_t score = CalculateCostBenefitScore(dieNo, blockNo);
+		GC_DBG("[CB_GC][STAT] die=%d block=%d invalid=%u valid=%u age=%u score=%u\r\n",
+				dieNo, blockNo, invalidSlices, validSlices, ageTicks, score);
+	}
+
+
 
 /*===========================================================================*/
 /* Init */
