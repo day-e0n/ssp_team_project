@@ -192,8 +192,9 @@ void nvme_main()
 		}
 
 		//GcScheduler();
-		CheckAndRunStwGc();
+		CheckAndRunOriginalGc();
 	}
 }
+
 
 
